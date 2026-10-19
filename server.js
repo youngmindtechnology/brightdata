@@ -317,6 +317,36 @@ app.get('/api/orders/:ref', limit(60, 60000), async (req, res) => {
   });
 });
 
+// Admin endpoint to view raw wholesale packages straight from DataMart
+app.get('/api/admin/wholesale-prices', admin, async (req, res) => {
+  try {
+    const r = await fetch(`${DATAMART_BASE_URL}/data-packages`, {
+      headers: { 'X-API-Key': DATAMART_API_KEY },
+      signal: AbortSignal.timeout(15000),
+    });
+    const j = await r.json();
+    if (!r.ok || j.status !== 'success') {
+      return res.status(502).json({ status: 'error', message: j.message || `DataMart returned status ${r.status}` });
+    }
+
+    
+    // Returns the exact unedited wholesale data structure from DataMart
+    res.json({ status: 'success', rawData: j.data });
+  } catch (e) {
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+// Health check endpoint for uptime monitors
+app.get('/api/health', (req, res) => {
+  res.status(200).json({
+    status: 'success',
+    message: 'Server is up and running',
+    timestamp: new Date().toISOString(),
+    uptime: Math.floor(process.uptime()),
+  });
+});
+
 /* ---- admin (set ADMIN_TOKEN in .env, send as x-admin-token) ---- */
 function admin(req, res, next) {
   if (!ADMIN_TOKEN || req.get('x-admin-token') !== ADMIN_TOKEN) return res.sendStatus(401);
