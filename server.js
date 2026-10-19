@@ -235,7 +235,7 @@ app.get('/api/catalog', limit(60, 60000), async (req, res) => {
   }
 });
 
-// Create a pending order. PRICE IS COMPUTED HERE — the browser's price is never trusted.
+// Create a pending order with Paystack charges factored in.
 app.post('/api/orders', limit(15, 60000), async (req, res) => {
   try {
     const b = req.body || {};
@@ -248,29 +248,48 @@ app.post('/api/orders', limit(15, 60000), async (req, res) => {
     const ref = 'BP-' + crypto.randomBytes(5).toString('hex').toUpperCase();
     const order = { ref, name, phone, email, status: 'pending_payment', placedAt: Date.now() };
 
+    let baseAmount = 0;
+
     if (b.product === 'data') {
       if (!NETWORKS[b.network]) return res.status(400).json({ status: 'error', message: 'Unknown network.' });
       const pk = await getPackages();
       const pkg = pk[b.network].find(p => p.capacity === Number(b.capacity));
       if (!pkg) return res.status(400).json({ status: 'error', message: 'That bundle is not available.' });
+      
+      baseAmount = pkg.price;
       Object.assign(order, {
         product: 'data', network: b.network, dmNetwork: NETWORKS[b.network],
         capacity: pkg.capacity, item: `${pkg.size} ${b.network.toUpperCase()}`,
-        amount: pkg.price, cost: pkg.cost,
+        cost: pkg.cost,
       });
     } else if (b.product === 'checker') {
       const c = CHECKERS[b.checkerType];
       const qty = Math.min(10, Math.max(1, parseInt(b.qty, 10) || 1));
       if (!c) return res.status(400).json({ status: 'error', message: 'Unknown checker type.' });
+      
+      baseAmount = c.price * qty;
       Object.assign(order, {
         product: 'checker', checkerType: b.checkerType, qty,
-        item: qty > 1 ? `${c.label} × ${qty}` : c.label, amount: c.price * qty,
+        item: qty > 1 ? `${c.label} × ${qty}` : c.label,
       });
     } else {
       return res.status(400).json({ status: 'error', message: 'Invalid product.' });
     }
 
+    // --- ADD PAYSTACK CHARGES CALCULATION ---
+    // Example: 1.95% standard Paystack Ghana fee.
+    // If you want to absorb flat fees or handle thresholds differently, adjust this formula.
+    const PAYSTACK_PERCENTAGE_FEE = 0.0195; 
+    
+    // Formula to ensure you get the full baseAmount after Paystack deducts its percentage:
+    // Total = baseAmount / (1 - fee_percentage)
+    const totalWithCharges = baseAmount / (1 - PAYSTACK_PERCENTAGE_FEE);
+    
+    // Round up to the next pesewa
+    order.amount = Math.ceil(totalWithCharges * 100 - 1e-9) / 100;
     order.amountPesewas = Math.round(order.amount * 100);
+    // ---------------------------------------
+
     orders[ref] = order;
     await save();
     res.json({ status: 'success', ref, email, item: order.item, amount: order.amount, amountPesewas: order.amountPesewas });
